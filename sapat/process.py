@@ -3,6 +3,7 @@
 
 import os
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Optional
 
 import click
@@ -10,7 +11,7 @@ from halo import Halo
 
 from sapat.audio_splitter import cleanup_chunks, should_split_file, split_audio_file
 from sapat.convert import convert_audio
-from sapat.providers.base import AudioFormat, TranscriptionProvider
+from sapat.providers.base import TranscriptionProvider
 
 
 def spinner_context(text: str):
@@ -27,10 +28,42 @@ def process_file(
     quality: str,
     correct: bool,
 ):
+    txt_file = Path(input_file).with_suffix(".txt")
+    # Include dangling symlinks. Do not spend time/API calls on a known collision.
+    if os.path.lexists(txt_file):
+        raise FileExistsError(f"Refusing to overwrite transcript: {txt_file}")
+    # Never reuse a neighboring file or delete the caller's input.
+    with TemporaryDirectory(prefix="sapat_audio_") as temporary:
+        converted_file = Path(temporary) / (
+            "audio." + provider.config.preferred_format.value
+        )
+        return _process_file(
+            input_file,
+            provider,
+            model,
+            language,
+            prompt,
+            temperature,
+            quality,
+            correct,
+            converted_file,
+        )
+
+
+def _process_file(
+    input_file: str,
+    provider: TranscriptionProvider,
+    model: str,
+    language: str,
+    prompt: Optional[str],
+    temperature: float,
+    quality: str,
+    correct: bool,
+    converted_file: Path,
+):
     input_path = Path(input_file)
     fmt = provider.config.preferred_format
     ext = fmt.value
-    converted_file = input_path.with_suffix(f".{ext}")
     txt_file = input_path.with_suffix(".txt")
 
     click.echo(click.style(f"\nProcessing: {input_file}", fg="cyan", bold=True))
@@ -45,14 +78,22 @@ def process_file(
                 spinner.fail(f"Conversion failed: {e}")
                 return
     else:
-        click.echo(click.style(f"{ext.upper()} file already exists, skipping", fg="yellow"))
+        click.echo(
+            click.style(f"{ext.upper()} file already exists, skipping", fg="yellow")
+        )
 
     # Transcribe (with splitting if needed)
     max_size = provider.config.max_file_size_mb
     if should_split_file(str(converted_file), max_size_mb=max_size):
-        click.echo(click.style(f"File is large (>{max_size}MB), splitting into chunks...", fg="yellow"))
+        click.echo(
+            click.style(
+                f"File is large (>{max_size}MB), splitting into chunks...", fg="yellow"
+            )
+        )
         try:
-            result = _process_large_audio(str(converted_file), provider, model, language, prompt, temperature)
+            result = _process_large_audio(
+                str(converted_file), provider, model, language, prompt, temperature
+            )
         except Exception as e:
             click.echo(click.style(f"Error processing large file: {e}", fg="red"))
             return
@@ -82,13 +123,12 @@ def process_file(
         )
 
     # Write output
-    with open(txt_file, "w", encoding="utf-8") as f:
+    # Exclusive creation also prevents clobbering a file created during inference.
+    with open(txt_file, "x", encoding="utf-8") as f:
         f.write(text)
     click.echo(click.style(f"Transcription saved to: {txt_file}", fg="green"))
 
-    # Cleanup
-    converted_file.unlink()
-    click.echo(click.style("Temporary audio file removed", fg="yellow"))
+    # The owned temporary directory is cleaned by process_file, including errors.
 
 
 def _process_large_audio(
@@ -119,10 +159,13 @@ def _process_large_audio(
                     )
                     all_texts.append(result.text.strip())
                 except Exception as e:
-                    click.echo(click.style(f"Warning: chunk {i+1} failed: {e}", fg="yellow"))
+                    click.echo(
+                        click.style(f"Warning: chunk {i+1} failed: {e}", fg="yellow")
+                    )
                     all_texts.append(f"[Chunk {i+1} transcription failed]")
 
         from sapat.providers.base import TranscriptionResult
+
         return TranscriptionResult(text=" ".join(all_texts))
 
     finally:
