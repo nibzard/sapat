@@ -29,5 +29,12 @@
     "postCreateCommand": {
       "ffmpeg": "sudo apt install ffmpeg -y",
       "requirements": "pip install -r requirements.txt"
+    },
+    "remoteEnv": {
+      "AZURE_OPENAI_API_KEY": "${localEnv:AZURE_OPENAI_API_KEY}",
+      "AZURE_OPENAI_ENDPOINT": "${localEnv:AZURE_OPENAI_ENDPOINT}",
+      "GROQ_API_KEY": "${localEnv:GROQ_API_KEY}",
+      "SAMBANOVA_API_KEY": "${localEnv:SAMBANOVA_API_KEY}",
+      "OPENAI_API_KEY": "${localEnv:OPENAI_API_KEY}"
     }
 }
